@@ -20,11 +20,11 @@ export default function AdsterraBanner({ className = '' }: AdsterraBannerProps) 
         </style>
       </head>
       <body>
-        <div id="container-7abdf4c8f0cb2b40ae9d9f5fece86bd7">
+        <div id="container-a0225abd1090ce29de920b5a2f02ed87">
           <div class="promo-title">SageMovies Premium HD Streaming</div>
           <div class="promo-desc">Enjoy zero-lag 1080p playback, offline downloads, and active server failover across all your devices.</div>
         </div>
-        <script async="async" data-cfasync="false" src="https://pl30470198.effectivecpmnetwork.com/7abdf4c8f0cb2b40ae9d9f5fece86bd7/invoke.js"></script>
+        <script async="async" data-cfasync="false" src="https://pl30566413.effectivecpmnetwork.com/a0225abd1090ce29de920b5a2f02ed87/invoke.js"></script>
       </body>
     </html>
   `;

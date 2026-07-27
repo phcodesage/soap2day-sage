@@ -22,7 +22,7 @@ import { useEffect, useRef } from 'react';
  * .env.production for deploys); setting it after a build has no effect.
  */
 
-const ENABLED = process.env.NEXT_PUBLIC_ADSTERRA_ENABLED === 'true';
+const ENABLED = process.env.NEXT_PUBLIC_ADSTERRA_ENABLED !== 'false';
 
 const SOCIAL_BAR_SRC =
   'https://pl30470197.effectivecpmnetwork.com/e3/96/62/e396627c978253460574b0e8b00bb87a.js';
