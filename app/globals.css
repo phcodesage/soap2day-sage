@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --netflix-red: #e50914;
+  --netflix-black: #141414;
+  --netflix-dark: #181818;
+  --netflix-gray: #808080;
+}
+
+body {
+  background-color: var(--netflix-black);
+  color: white;
+  /* `clip`, not `hidden`: `overflow-x: hidden` makes body a scroll container, which
+     breaks every programmatic scroll on the page — window.scrollTo() and
+     scrollIntoView() both silently do nothing while wheel scrolling still works.
+     `clip` suppresses horizontal overflow without creating a scroll box. */
+  overflow-x: clip;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--netflix-black);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(229, 9, 20, 0.7);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(229, 9, 20, 1);
+}
+
+/* Hide scrollbar for carousels */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom scrollbar for search results */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  display: block;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(229, 9, 20, 0.7);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(229, 9, 20, 1);
+}
+
+/* Netflix Loader */
+.netflix-loader .netflix-logo {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  overflow: hidden;
+  transform: scale(0.8);
+}
+
+.netflix-loader .netflix-logo:before,
+.netflix-loader .netflix-logo:after,
+.netflix-loader .netflix-logo .middle-bar {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 120px;
+  background: var(--netflix-red);
+  box-shadow: 0 0 20px rgba(229, 9, 20, 0.8);
+  animation: netflix-pulse 1.2s linear infinite;
+}
+
+.netflix-loader .netflix-logo:before {
+  left: 0;
+  transform: skewX(25deg);
+}
+
+.netflix-loader .netflix-logo:after {
+  left: 80px;
+  transform: skewX(-25deg);
+  animation-delay: 0.6s;
+}
+
+.netflix-loader .netflix-logo .middle-bar {
+  left: 40px;
+  animation-delay: 0.3s;
+}
+
+@keyframes netflix-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Banner Gradient */
+.banner-gradient {
+  background: linear-gradient(to top, rgba(20, 20, 20, 1) 0%, rgba(20, 20, 20, 0) 100%);
+}
+
+/* Aspect Ratio for video */
+.aspect-video {
+  aspect-ratio: 16 / 9;
+}
+
+/* Adsterra Native Banner — compact (narrow column) variant.
+   The vendor injects a single flex row of 4 tiles. In the movie page sidebar that is
+   ~296px wide, which squeezes headlines to roughly one word per line. Allowing the
+   row to wrap puts the tiles 2-up and gives the text room.
+   Deliberately gentle: these are the vendor's own elements, so if Adsterra changes
+   the markup these rules simply stop matching rather than breaking the unit.
+   Structure: .ad-native-compact > #container-<hash> > row > tile.<hash>__bn-con */
+.ad-native-compact > div > div {
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+
+.ad-native-compact [class*='__bn-con'] {
+  flex: 0 0 calc(50% - 8px) !important;
+  min-width: 0 !important;
+}
