@@ -20,19 +20,19 @@ export default function AdsterraBanner({ className = '' }: AdsterraBannerProps) 
         </style>
       </head>
       <body>
-        <div id="container-a0225abd1090ce29de920b5a2f02ed87">
+        <div id="container-7abdf4c8f0cb2b40ae9d9f5fece86bd7">
           <div class="promo-title">SageMovies Premium HD Streaming</div>
           <div class="promo-desc">Enjoy zero-lag 1080p playback, offline downloads, and active server failover across all your devices.</div>
         </div>
-        <script async="async" data-cfasync="false" src="https://pl30566413.effectivecpmnetwork.com/a0225abd1090ce29de920b5a2f02ed87/invoke.js"></script>
+        <script async="async" data-cfasync="false" src="https://pl30470198.effectivecpmnetwork.com/7abdf4c8f0cb2b40ae9d9f5fece86bd7/invoke.js"></script>
       </body>
     </html>
   `;
 
   return (
-    <div className={`w-full overflow-hidden rounded-xl bg-black/40 border border-white/10 p-2 ${className}`}>
+    <div className={`w-full overflow-hidden rounded-xl bg-zinc-900 border border-zinc-800 p-2 shadow-lg ${className}`}>
       <div className="flex items-center justify-between mb-1.5 px-1">
-        <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded bg-netflix-red/20 text-netflix-red border border-netflix-red/30">
+        <span className="text-[9px] uppercase tracking-wider font-extrabold px-2 py-0.5 rounded-full bg-netflix-red text-white shadow-sm">
           SPONSORED AD
         </span>
       </div>
