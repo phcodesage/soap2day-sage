@@ -3,14 +3,15 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Star, Play, X, ChevronDown, ChevronUp, Info } from 'lucide-react';
+import { ArrowLeft, Star, Play, X, ChevronDown, ChevronUp, Info, Check } from 'lucide-react';
 import Image from 'next/image';
 import { useAppContext } from '../../../../lib/context/AppContext';
 import { useWatchHistory } from '../../../../lib/hooks/useWatchHistory';
+import { useWatchedEpisodes } from '../../../../lib/hooks/useWatchedEpisodes';
 import { getSimilarMovies } from '../../../../lib/recommendations';
 import type { TMDBMovie } from '../../../../types/tmdb';
 import { cn } from '../../../../lib/utils';
-import { AdsterraNativeBanner } from '../../../../components/Adsterra';
+import { AdsterraNativeBanner, openAdsterraDirectLink } from '../../../../components/Adsterra';
 import {
   VIDEO_SERVERS,
   SUBTITLE_LANGUAGES,
@@ -37,6 +38,20 @@ export default function MovieDetailPage() {
   const slug = params?.slug as string;
   const { genres } = useAppContext();
   const { addToHistory } = useWatchHistory();
+  const { isWatched, markWatched, toggleWatched } = useWatchedEpisodes();
+
+  // Ad frequency: every Nth playback interaction (Play/Refresh, server switch, episode
+  // switch) opens an Adsterra Direct Link. A ref, not state, so counting never triggers
+  // a re-render. Must be called straight from the click handler to keep the user gesture
+  // the popup blocker requires.
+  const AD_EVERY = 3;
+  const playbackInteractions = React.useRef(0);
+  const registerPlaybackAdInteraction = React.useCallback(() => {
+    playbackInteractions.current += 1;
+    if (playbackInteractions.current % AD_EVERY === 0) {
+      openAdsterraDirectLink();
+    }
+  }, []);
 
   const [movie, setMovie] = useState<TMDBMovie | any>(null);
   const [server, setServer] = useState(DEFAULT_SERVER);
@@ -56,6 +71,12 @@ export default function MovieDetailPage() {
   const [isDescExpanded, setIsDescExpanded] = useState(false);
   const [similarMovies, setSimilarMovies] = useState<TMDBMovie[]>([]);
   const [showUpNext, setShowUpNext] = useState(false);
+
+  // Live per-server reachability, keyed by server id. 'checking' while a probe is in
+  // flight; 'up'/'down' once /api/video-health reports back. Empty until the movie loads.
+  type ServerStatus = 'up' | 'down' | 'checking';
+  const [serverHealth, setServerHealth] = useState<Record<string, ServerStatus>>({});
+  const serverNumber = (sid: string) => VIDEO_SERVERS.findIndex((s) => s.id === sid) + 1;
 
   // Fetch movie details from our API
   useEffect(() => {
@@ -140,6 +161,47 @@ export default function MovieDetailPage() {
     }
   }, [id, slug]);
 
+  // Probe every provider once the movie is known, so the server picker can mark dead
+  // servers and default to a working one. Host-level reachability barely moves with
+  // season/episode, so we key on the movie id only and keep the outbound probes rare.
+  const healthReqId = React.useRef(0);
+  const runHealthCheck = React.useCallback(() => {
+    if (!movie) return;
+    const type = movie.first_air_date ? 'tv' : 'movie';
+    const reqId = ++healthReqId.current;
+
+    setServerHealth(Object.fromEntries(VIDEO_SERVERS.map((s) => [s.id, 'checking'])));
+
+    fetch(
+      `/api/video-health/${type}/${movie.id}?season=${selectedSeason}&episode=${selectedEpisode}`
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        // Ignore a stale probe that a newer re-check has superseded.
+        if (reqId !== healthReqId.current || !data?.servers) return;
+        setServerHealth(data.servers);
+        // If the current pick is dead, silently switch to the first reachable server so
+        // the default the user lands on actually plays. Never overrides a manual pick
+        // mid-playback — the probe resolves before anyone hits play.
+        if (!isPlaying && data.servers[server] === 'down') {
+          const firstUp = VIDEO_SERVERS.find((s) => data.servers[s.id] === 'up');
+          if (firstUp) setServer(firstUp.id);
+        }
+      })
+      .catch(() => {
+        if (reqId === healthReqId.current) setServerHealth({});
+      });
+  }, [movie, selectedSeason, selectedEpisode, isPlaying, server]);
+
+  useEffect(() => {
+    // Auto-probe once per title; manual re-checks go through the button in Stream Settings.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    runHealthCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movie?.id]);
+
+  const isCheckingHealth = Object.values(serverHealth).some((v) => v === 'checking');
+
   const loadVideoSource = async (
     selectedServer: string,
     selectedLang: string = lang,
@@ -161,6 +223,9 @@ export default function MovieDetailPage() {
       if (data.embedURL) {
         setEmbedUrl(data.embedURL);
         addToHistory(movie);
+        // Playing an episode counts as watching it. Movies have no episode grid, so
+        // this only applies to TV. Idempotent, so re-loads (server/lang change) are fine.
+        if (type === 'tv') markWatched(movie.id, sNum, eNum);
       } else {
         setError('Video source not available for this server. Try another server.');
         if (!isPlaying) setIsPlaying(false);
@@ -243,73 +308,102 @@ export default function MovieDetailPage() {
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="h-screen w-screen bg-netflix-black overflow-hidden flex flex-col"
+      className="h-screen w-screen bg-[#0F1015] overflow-hidden flex flex-col font-sans"
     >
-      {/* Back Button */}
-      <button
-        onClick={() => router.back()}
-        className="fixed top-4 left-4 z-[60] bg-black/60 text-white rounded-full p-2 hover:bg-netflix-red transition-all active:scale-90"
-      >
-        <ArrowLeft className="w-5 h-5 md:w-6 md:h-6" />
-      </button>
+      {/* Steam Deck Top Header Bar */}
+      <div className="bg-[#12141A] border-b-4 border-black px-3 md:px-6 py-2.5 flex items-center justify-between z-50 shrink-0 shadow-[0_4px_0_0_rgba(0,0,0,1)]">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => router.back()}
+            className="px-3 py-1 bg-[#1A9FFF] text-black font-black text-xs uppercase tracking-wider border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-white hover:-translate-y-0.5 transition-all flex items-center space-x-1"
+          >
+            <span className="bg-black text-[#1A9FFF] text-[10px] px-1 py-0.5 font-mono">B</span>
+            <ArrowLeft className="w-3.5 h-3.5 stroke-[3]" />
+            <span className="hidden sm:inline">BACK</span>
+          </button>
+
+          <div className="flex items-center space-x-2">
+            <span className="bg-black text-[#66C0F4] font-black text-xs px-2.5 py-1 border-2 border-black uppercase tracking-wider shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+              🎮 STEAM DECK PLAYER
+            </span>
+            <span className="hidden md:inline-block bg-[#107C10] text-white font-black text-[10px] px-2 py-0.5 border border-black uppercase font-mono">
+              60 FPS • 1080P
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          {isPlaying && (
+            <button
+              onClick={() => {
+                registerPlaybackAdInteraction();
+                loadVideoSource(server, lang);
+              }}
+              className="px-2.5 py-1 bg-[#FFE600] text-black font-black text-xs border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-black hover:text-[#FFE600] transition-all flex items-center space-x-1"
+            >
+              <span className="bg-black text-[#FFE600] text-[10px] px-1 py-0.5 font-mono">A</span>
+              <span className="text-[10px] uppercase">REFRESH</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => router.push('/')}
+            className="px-2.5 py-1 bg-white text-black font-black text-xs border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-[#FF3366] hover:text-white transition-all text-[10px] uppercase"
+          >
+            STEAM DECK HOME
+          </button>
+        </div>
+      </div>
 
       {/* Main Content: Player (Left/Top) + Details Sidebar (Right/Bottom) */}
       <div className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
-        {/* Left/Top Section: Dominant Video Player Stage */}
-        <div className="relative bg-black h-[40vh] md:h-full flex-1 md:min-w-0">
+        {/* Left/Top Section: Steam Deck Video Player Stage */}
+        <div className="relative bg-black h-[45vh] md:h-full flex-1 md:min-w-0 border-b-4 md:border-b-0 md:border-r-4 border-black">
           {isPlaying ? (
             <>
               {isLoading && (
-                <div className="absolute inset-0 z-10 bg-black/80 flex flex-col items-center justify-center">
-                  <div className="netflix-loader scale-75 md:scale-100">
-                    <div className="netflix-logo">
-                      <div className="middle-bar" />
-                    </div>
-                  </div>
-                  <p className="mt-4 font-bold text-sm">Loading Player...</p>
+                <div className="absolute inset-0 z-10 bg-[#0F1015]/95 flex flex-col items-center justify-center border-4 border-black p-6">
+                  <div className="w-12 h-12 border-4 border-black border-t-[#1A9FFF] rounded-none animate-spin mb-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]" />
+                  <p className="font-black text-xs uppercase tracking-widest text-[#1A9FFF] bg-black px-3 py-1 border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                    CONNECTING STEAM DRIVE...
+                  </p>
                 </div>
               )}
 
               {error && (
-                <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center text-center p-6">
-                  <p className="text-base font-bold text-red-400 mb-4">{error}</p>
+                <div className="absolute inset-0 z-20 bg-[#0F1015]/95 flex flex-col items-center justify-center text-center p-6">
+                  <p className="text-xs font-black text-red-500 mb-4 bg-black p-3 border-2 border-black uppercase tracking-wider">
+                    {error}
+                  </p>
                   <button
                     onClick={() => {
                       setError(null);
                       setIsPlaying(false);
                     }}
-                    className="bg-netflix-red hover:bg-red-700 text-white font-bold py-2 px-6 rounded-md transition text-sm"
+                    className="bg-[#1A9FFF] hover:bg-[#FFE600] text-black font-black px-6 py-2.5 border-3 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition text-xs uppercase"
                   >
-                    Try Again
+                    SELECT ANOTHER DRIVE
                   </button>
                 </div>
               )}
 
-              {/* The Up Next gallery deliberately lives in the details panel, NOT here:
-                  anything layered over the iframe covers the video and its controls.
-                  Keep the player surface clear of our own UI. */}
               {embedUrl && (
                 <iframe
-                  // Changing `sandbox` on a live iframe has no effect until the
-                  // document reloads, so keying on it forces React to remount.
                   key={`${embedUrl}|${sandboxed}`}
                   src={embedUrl}
                   className="w-full h-full border-none"
                   allow="autoplay; fullscreen *; encrypted-media; picture-in-picture"
                   allowFullScreen
                   referrerPolicy="origin"
-                  // Omitting allow-popups / allow-top-navigation is what stops the
-                  // provider's popunders and forced redirects. Applied only to
-                  // providers that tolerate it — see PLAYER_SANDBOX.
                   sandbox={sandboxed ? PLAYER_SANDBOX : undefined}
                 />
               )}
 
               <button
                 onClick={handleClosePlayer}
-                className="absolute top-4 right-4 z-30 bg-black/60 text-white rounded-full p-2 hover:bg-red-600 transition active:scale-90"
+                className="absolute top-3 right-3 z-30 bg-[#FF3366] text-white font-black text-xs p-2 border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:bg-black transition active:scale-95"
               >
-                <X className="w-4 h-4 md:w-5 md:h-5" />
+                <X className="w-4 h-4 stroke-[3]" />
               </button>
             </>
           ) : (
@@ -319,25 +413,25 @@ export default function MovieDetailPage() {
                   src={`${IMG_URL}${backdropPath}`}
                   alt={title}
                   fill
-                  className="object-cover"
+                  className="object-cover opacity-75"
                   priority
                   sizes="100vw"
                 />
               ) : (
-                <div className="w-full h-full bg-gradient-to-br from-netflix-dark to-black" />
+                <div className="w-full h-full bg-[#12141A]" />
               )}
-              <div className="absolute inset-0 bg-gradient-to-t from-netflix-black via-black/30 to-black/10" />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#0F1015] via-black/40 to-transparent" />
 
-              <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
+              <div className="absolute inset-0 flex flex-col items-center justify-center z-10 p-4">
                 <button
                   onClick={() => handlePlay()}
-                  className="group flex flex-col items-center gap-4 active:scale-95 transition-transform"
+                  className="group flex flex-col items-center gap-3 active:scale-95 transition-transform"
                 >
-                  <div className="w-20 h-20 md:w-28 md:h-28 rounded-full bg-white/20 backdrop-blur-sm border-2 border-white/80 flex items-center justify-center group-hover:bg-netflix-red group-hover:border-netflix-red transition-all duration-300 group-hover:scale-110 shadow-2xl">
-                    <Play className="w-10 h-10 md:w-14 md:h-14 text-white fill-current ml-1" />
+                  <div className="w-20 h-20 md:w-24 md:h-24 bg-[#1A9FFF] text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center group-hover:bg-[#FFE600] group-hover:-translate-y-1 transition-all duration-200">
+                    <Play className="w-10 h-10 md:w-12 md:h-12 fill-current ml-1" />
                   </div>
-                  <span className="text-white font-bold text-lg md:text-2xl tracking-wide group-hover:text-netflix-red transition-colors drop-shadow-lg uppercase italic">
-                    Play Now
+                  <span className="bg-black text-[#1A9FFF] font-black text-sm md:text-lg tracking-wider px-4 py-1.5 border-3 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] group-hover:text-[#FFE600] transition-colors uppercase">
+                    [A] LAUNCH STEAM STREAM
                   </span>
                 </button>
               </div>
@@ -345,59 +439,111 @@ export default function MovieDetailPage() {
           )}
         </div>
 
-        {/* Right/Bottom Section: Details Sidebar (Desktop) or Scrollable Info (Mobile) */}
-        <div className="relative bg-netflix-black border-t md:border-t-0 md:border-l border-gray-800 flex flex-col h-[60vh] md:h-full md:w-[420px] lg:w-[480px] xl:w-[520px] shrink-0 min-h-0">
-          {/* Scroll container — the overlay below must stay pinned to the panel, so
-              scrolling happens one level down from the `relative` positioning context. */}
+        {/* Right/Bottom Section: Steam Deck Mobile-First Control Panel */}
+        <div className="relative bg-[#0F1015] flex flex-col h-[55vh] md:h-full md:w-[420px] lg:w-[480px] xl:w-[520px] shrink-0 min-h-0">
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar flex flex-col">
-            {/* Main Info Padding Wrapper */}
-            <div className="p-5 md:p-8 flex flex-col gap-6">
-              {/* Header: Title, Meta, & Primary CTA */}
-              <div className="flex flex-col gap-4">
-                <div className="flex gap-4 items-start">
-                  {/* Compact Poster */}
-                  {posterPath && (
-                    <div className="relative w-20 h-28 md:w-24 md:h-36 rounded-xl shadow-2xl overflow-hidden shrink-0 border border-gray-800">
-                      <Image
-                        src={`${THUMB_URL}${posterPath}`}
-                        alt={title}
-                        fill
-                        className="object-cover"
-                        sizes="96px"
-                      />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0 flex flex-col justify-between h-full">
-                    <div>
-                      <h1 className="text-xl md:text-2xl font-black leading-tight tracking-tight text-white mb-2 line-clamp-2">
-                        {title}
-                      </h1>
-                      <div className="flex flex-wrap items-center gap-2 mb-3">
-                        <span className="inline-flex items-center gap-1 bg-amber-500 text-black px-2.5 py-0.5 rounded-full text-xs font-black shadow-sm">
-                          <Star className="w-3.5 h-3.5 fill-current" /> {voteAverage}
-                        </span>
-                        <span className="bg-gray-800 text-gray-200 px-2.5 py-0.5 rounded-full text-xs font-bold">
-                          {releaseDate?.split('-')[0]}
-                        </span>
-                        <span className="bg-netflix-red text-white px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider">
-                          {movie.first_air_date ? 'TV Series' : 'Movie'}
-                        </span>
-                        <span className="bg-emerald-600 text-white px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wide">
-                          HD / 4K
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Instant Play CTA Button */}
-                    <button
-                      onClick={() => handlePlay()}
-                      disabled={isLoading}
-                      className="w-full bg-netflix-red hover:bg-red-700 text-white text-xs font-black py-3 px-4 rounded-xl shadow-lg shadow-red-900/30 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 uppercase tracking-wider"
-                    >
-                      <Play className="w-4 h-4 fill-current ml-0.5" />
-                      {isPlaying ? 'REFRESH STREAM' : 'WATCH NOW FREE'}
-                    </button>
+            <div className="p-4 md:p-6 flex flex-col gap-5">
+              {/* Header Meta Info */}
+              <div className="flex gap-4 items-start bg-black p-4 border-3 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                {posterPath && (
+                  <div className="relative w-20 h-28 border-2 border-black shrink-0 overflow-hidden shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                    <Image
+                      src={`${THUMB_URL}${posterPath}`}
+                      alt={title}
+                      fill
+                      className="object-cover"
+                      sizes="80px"
+                    />
                   </div>
+                )}
+
+                <div className="flex-1 min-w-0 flex flex-col justify-between">
+                  <div>
+                    <h1 className="text-base md:text-lg font-black uppercase text-white tracking-tight line-clamp-2 mb-1.5">
+                      {title}
+                    </h1>
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                      <span className="bg-[#FFE600] text-black px-2 py-0.5 border border-black text-[10px] font-black flex items-center gap-1">
+                        <Star className="w-3 h-3 fill-current" /> {voteAverage}
+                      </span>
+                      <span className="bg-[#1A9FFF] text-black px-2 py-0.5 border border-black text-[10px] font-black uppercase">
+                        {movie.first_air_date ? 'TV SERIES' : 'MOVIE'}
+                      </span>
+                      <span className="bg-[#107C10] text-white px-2 py-0.5 border border-black text-[10px] font-black font-mono">
+                        1080P
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      registerPlaybackAdInteraction();
+                      handlePlay();
+                    }}
+                    disabled={isLoading}
+                    className="w-full bg-[#1A9FFF] hover:bg-[#FFE600] text-black font-black text-xs py-2.5 px-3 border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5 hover:-translate-y-0.5 transition-all disabled:opacity-50 uppercase tracking-wider"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>{isPlaying ? '[A] REFRESH STREAM' : '[A] WATCH NOW FREE'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Steam Deck Server Picker Bar (Mobile First) */}
+              <div className="bg-black p-4 border-3 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] space-y-3">
+                <div className="flex items-center justify-between border-b-2 border-zinc-800 pb-2">
+                  <span className="text-xs font-black uppercase text-[#66C0F4] tracking-wider flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 bg-[#107C10] border border-black inline-block" />
+                    STEAM DRIVES / SERVERS
+                  </span>
+                  <button
+                    type="button"
+                    onClick={runHealthCheck}
+                    disabled={isCheckingHealth}
+                    className="text-[10px] font-black uppercase bg-zinc-800 text-zinc-300 px-2 py-0.5 border border-black hover:bg-[#1A9FFF] hover:text-black transition-colors"
+                  >
+                    {isCheckingHealth ? 'PINGING…' : 'RE-PING'}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {VIDEO_SERVERS.map((s, i) => {
+                    const st = serverHealth[s.id];
+                    const isSelected = server === s.id;
+
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => {
+                          registerPlaybackAdInteraction();
+                          handleServerChange(s.id);
+                        }}
+                        className={cn(
+                          'p-2 text-left border-2 border-black text-xs font-black transition-all flex flex-col justify-between',
+                          isSelected
+                            ? 'bg-[#1A9FFF] text-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]'
+                            : 'bg-[#12141A] text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                        )}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-mono text-[10px]">DRIVE 0{i + 1}</span>
+                          <span
+                            className={cn(
+                              'text-[9px] font-mono px-1 py-0.2 border border-black',
+                              st === 'down'
+                                ? 'bg-red-600 text-white'
+                                : st === 'checking'
+                                  ? 'bg-yellow-400 text-black'
+                                  : 'bg-[#107C10] text-white'
+                            )}
+                          >
+                            {st === 'down' ? 'OFFLINE' : st === 'checking' ? 'PINGING' : 'ONLINE'}
+                          </span>
+                        </div>
+                        <span className="truncate uppercase text-[11px]">{s.id}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -410,7 +556,8 @@ export default function MovieDetailPage() {
                       EPISODE SELECTOR
                     </span>
                     <span className="text-[11px] font-bold text-netflix-red">
-                      Season {selectedSeason} of {movie.number_of_seasons || movie.seasons?.length || 1}
+                      Season {selectedSeason} of{' '}
+                      {movie.number_of_seasons || movie.seasons?.length || 1}
                     </span>
                   </div>
 
@@ -438,7 +585,9 @@ export default function MovieDetailPage() {
                     <ChevronDown className="absolute right-3 bottom-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
                   </div>
 
-                  {/* Horizontal Episode Scroll Chips */}
+                  {/* Horizontal Episode Scroll Chips. Watched episodes carry a green check
+                    badge; tap the badge to toggle watched without playing, or just play
+                    (which auto-marks it). */}
                   <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
                     {Array.from(
                       {
@@ -447,27 +596,57 @@ export default function MovieDetailPage() {
                             ?.episode_count || 24,
                       },
                       (_, i) => i + 1
-                    ).map((ep) => (
-                      <button
-                        key={ep}
-                        onClick={() => {
-                          setSelectedEpisode(ep);
-                          if (isPlaying) {
-                            loadVideoSource(server, lang, selectedSeason, ep);
-                          } else {
-                            handlePlay(selectedSeason, ep);
-                          }
-                        }}
-                        className={cn(
-                          'px-3.5 py-2 rounded-xl text-xs font-black transition-all shrink-0 border flex items-center gap-1',
-                          selectedEpisode === ep
-                            ? 'bg-netflix-red text-white border-netflix-red shadow-lg shadow-red-900/40'
-                            : 'bg-netflix-black text-gray-400 border-gray-800 hover:border-gray-600 hover:text-white'
-                        )}
-                      >
-                        <span>E{ep}</span>
-                      </button>
-                    ))}
+                    ).map((ep) => {
+                      const watched = isWatched(movie.id, selectedSeason, ep);
+                      const selected = selectedEpisode === ep;
+                      return (
+                        <button
+                          key={ep}
+                          onClick={() => {
+                            registerPlaybackAdInteraction();
+                            setSelectedEpisode(ep);
+                            if (isPlaying) {
+                              loadVideoSource(server, lang, selectedSeason, ep);
+                            } else {
+                              handlePlay(selectedSeason, ep);
+                            }
+                          }}
+                          className={cn(
+                            'px-3.5 py-2 rounded-xl text-xs font-black transition-all shrink-0 border flex items-center gap-1.5',
+                            selected
+                              ? 'bg-netflix-red text-white border-netflix-red shadow-lg shadow-red-900/40'
+                              : watched
+                                ? 'bg-netflix-black text-gray-300 border-emerald-700/60 hover:border-emerald-500'
+                                : 'bg-netflix-black text-gray-400 border-gray-800 hover:border-gray-600 hover:text-white'
+                          )}
+                        >
+                          <span>E{ep}</span>
+                          <span
+                            role="button"
+                            aria-label={
+                              watched
+                                ? `Mark episode ${ep} as unwatched`
+                                : `Mark episode ${ep} as watched`
+                            }
+                            title={watched ? 'Watched — tap to unmark' : 'Mark as watched'}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleWatched(movie.id, selectedSeason, ep);
+                            }}
+                            className={cn(
+                              'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                              watched
+                                ? 'border-emerald-400 bg-emerald-500 text-white'
+                                : selected
+                                  ? 'border-white/60 text-transparent hover:text-white/80'
+                                  : 'border-gray-600 text-transparent hover:text-gray-300'
+                            )}
+                          >
+                            <Check className="h-2.5 w-2.5" strokeWidth={3.5} />
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -476,28 +655,68 @@ export default function MovieDetailPage() {
               <details className="group bg-zinc-900 rounded-2xl border border-zinc-800 overflow-hidden shadow-md">
                 <summary className="flex items-center justify-between p-3.5 text-xs font-bold text-gray-400 cursor-pointer select-none hover:text-white transition-colors">
                   <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                    STREAM SETTINGS ({server})
+                    <span
+                      className={cn(
+                        'w-2 h-2 rounded-full',
+                        serverHealth[server] === 'down'
+                          ? 'bg-red-500'
+                          : serverHealth[server] === 'checking'
+                            ? 'bg-amber-400 animate-pulse'
+                            : 'bg-emerald-400'
+                      )}
+                    />
+                    STREAM SETTINGS (Server {serverNumber(server)})
                   </span>
                   <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180 text-gray-500" />
                 </summary>
                 <div className="p-4 pt-1 flex flex-col gap-3 border-t border-gray-800/60">
                   <div className="relative">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase mb-1 block">Streaming Server</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[10px] text-gray-500 font-bold uppercase block">
+                        Streaming Server
+                      </label>
+                      <button
+                        type="button"
+                        onClick={runHealthCheck}
+                        disabled={isCheckingHealth}
+                        className="text-[10px] font-bold uppercase text-gray-500 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-default"
+                      >
+                        {isCheckingHealth ? 'Checking…' : 'Re-check'}
+                      </button>
+                    </div>
                     <select
                       value={server}
-                      onChange={(e) => handleServerChange(e.target.value)}
+                      onChange={(e) => {
+                        registerPlaybackAdInteraction();
+                        handleServerChange(e.target.value);
+                      }}
                       className="w-full bg-netflix-black text-white text-xs border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-netflix-red transition-all appearance-none cursor-pointer"
                     >
-                      {VIDEO_SERVERS.map((s) => (
-                        <option key={s.id} value={s.id}>{s.label}</option>
-                      ))}
+                      {VIDEO_SERVERS.map((s, i) => {
+                        const st = serverHealth[s.id];
+                        const tag =
+                          st === 'down'
+                            ? ' — Offline'
+                            : st === 'checking'
+                              ? ' — Checking…'
+                              : st === 'up'
+                                ? ' — Online'
+                                : '';
+                        return (
+                          <option key={s.id} value={s.id}>
+                            Server {i + 1}
+                            {tag}
+                          </option>
+                        );
+                      })}
                     </select>
-                    <ChevronDown className="absolute right-3 bottom-2.5 w-4 h-4 text-gray-500 pointer-events-none" />
+                    <ChevronDown className="pointer-events-none absolute right-3 bottom-2.5 h-4 w-4 text-gray-500" />
                   </div>
 
                   <div className="relative">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase mb-1 block">Subtitle Language</label>
+                    <label className="text-[10px] text-gray-500 font-bold uppercase mb-1 block">
+                      Subtitle Language
+                    </label>
                     <select
                       value={lang}
                       onChange={(e) => handleLangChange(e.target.value)}
@@ -505,7 +724,9 @@ export default function MovieDetailPage() {
                       className="w-full bg-netflix-black text-white text-xs border border-gray-700 rounded-lg px-3 py-2 outline-none focus:border-netflix-red transition-all appearance-none cursor-pointer disabled:opacity-40"
                     >
                       {SUBTITLE_LANGUAGES.map((l) => (
-                        <option key={l.code} value={l.code}>{l.label}</option>
+                        <option key={l.code} value={l.code}>
+                          {l.label}
+                        </option>
                       ))}
                     </select>
                     <ChevronDown className="absolute right-3 bottom-2.5 w-4 h-4 text-gray-500 pointer-events-none" />
